@@ -1,107 +1,95 @@
-from flask import Flask, render_template_string, jsonify
+import os
+from flask import Flask, render_template, request, jsonify
 import requests
 
 app = Flask(__name__)
 
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Analyseur Matchs du Jour</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 15px; margin: 0; }
-        h1 { font-size: 1.3rem; color: #38bdf8; text-align: center; margin-bottom: 15px; }
-        .match-card { background: #1e293b; padding: 12px; margin-bottom: 12px; border-radius: 10px; border-left: 4px solid #38bdf8; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
-        .teams { font-weight: bold; font-size: 1rem; margin-bottom: 6px; }
-        .badge { display: inline-block; background: #0284c7; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; margin-right: 4px; margin-bottom: 4px; }
-        .badge-btts { background: #d97706; }
-        .badge-market { background: #059669; }
-        .details { font-size: 0.85rem; color: #94a3b8; margin-top: 6px; line-height: 1.3; }
-    </style>
-</head>
-<body>
-    <h1>⚽ Matchs du Jour & Analyses Réelles</h1>
-    <div id="matches">Chargement des matchs en direct...</div>
+# Clé API Football-Data
+FOOTBALL_DATA_API_KEY = os.getenv("FOOTBALL_DATA_API_KEY", "934b6fce2a73484791292a5d7318a83b")
 
-    <script>
-        fetch('/api/matches')
-            .then(res => res.json())
-            .then(data => {
-                const container = document.getElementById('matches');
-                if (data.length === 0) {
-                    container.innerHTML = "<p style='text-align:center;'>Aucun match disponible pour le moment.</p>";
-                    return;
-                }
-                container.innerHTML = data.map(m => `
-                    <div class="match-card">
-                        <div class="teams">${m.home} vs ${m.away} <span style="font-size:0.8rem; color:#38bdf8; float:right;">[${m.status}]</span></div>
-                        <div>
-                            <span class="badge badge-btts">BTTS: ${m.btts}</span>
-                            <span class="badge badge-market">Marché: ${m.market}</span>
-                        </div>
-                        <div class="details">💡 <b>Analyse :</b> ${m.analysis}</div>
-                    </div>
-                `).join('');
-            });
-    </script>
-</body>
-</html>
-"""
+# Liste des compétitions majeures
+LEAGUE_CODES = {
+    "Ligue 1": "FL1",
+    "Premier League": "PL",
+    "La Liga": "PD",
+    "Serie A": "SA",
+    "Bundesliga": "BL1",
+    "Champions League": "CL"
+}
 
-def fetch_live_matches():
-    matches = []
-    try:
-        # Utilisation d'un flux public de données sportives ouvertes (ex: api de football-data ou équivalent open-source)
-        # Ici, on interroge un endpoint public ou une structure de secours dynamique
-        url = "https://raw.githubusercontent.com/openfootball/football.json/master/2025-26/en.1.json" # Exemple de dépôt public de matchs réels
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers, timeout=5)
-        
-        if response.status_code == 200:
-            data = response.json()
-            # Extraction des derniers matchs du calendrier réel
-            rounds = data.get('rounds', [])
-            if rounds:
-                last_matches = rounds[-1].get('matches', [])[:5] # Prendre les matchs récents
-                for match in last_matches:
-                    home = match.get('team1', 'Équipe Domicile')
-                    away = match.get('team2', 'Équipe Extérieur')
-                    matches.append({
-                        "home": home,
-                        "away": away,
-                        "status": "Journée en cours",
-                        "btts": "Oui (Analysé)",
-                        "market": "BTTS & Over 2.5",
-                        "analysis": "Calendrier analysé : xG et fragilité défensive évalués selon la forme récente."
+headers = {
+    "X-Auth-Token": FOOTBALL_DATA_API_KEY
+}
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+@app.route("/get_matches", methods=["POST", "GET"])
+def get_matches():
+    """Récupère automatiquement les prochains matchs de tous les grands championnats."""
+    all_matches = []
+    
+    for league_name, code in LEAGUE_CODES.items():
+        url = f"https://api.football-data.org/v4/competitions/{code}/matches?status=SCHEDULED"
+        try:
+            res = requests.get(url, headers=headers, timeout=5)
+            if res.status_code == 200:
+                matches_data = res.json().get("matches", [])
+                for m in matches_data[:2]:  # Récupère 2 matchs par championnat
+                    all_matches.append({
+                        "league": league_name,
+                        "team_a": m["homeTeam"]["name"],
+                        "team_b": m["awayTeam"]["name"],
+                        "date": m["utcDate"]
                     })
-    except Exception as e:
-        print(f"Erreur : {e}")
+        except Exception as e:
+            print(f"Erreur pour {league_name}: {e}")
+            continue
 
-    # Si le flux direct ne renvoie rien pour aujourd'hui, on structure un affichage dynamique propre basé sur des rencontres majeures actualisées
-    if not matches:
-        matches = [
-            {
-                "home": "Paris Saint-Germain", "away": "Marseille", "status": "Ce soir 20:45",
-                "btts": "Oui", "market": "BTTS & Plus de 2.5 buts",
-                "analysis": "Choc à fort enjeu. Rivalité historique, arbitrage strict attendu. Fragilité défensive constatée des deux côtés."
-            },
-            {
-                "home": "Real Madrid", "away": "Atlético Madrid", "status": "En direct",
-                "btts": "Non (Fermé)", "market": "Moins de 2.5 buts",
-                "analysis": "Gros enjeu tactique, bloc défensif compact. Calendrier chargé pour le favori réduisant son efficacité xG."
+    return jsonify({"status": "success", "matches": all_matches})
+
+@app.route("/analyze_match", methods=["POST"])
+def analyze_match():
+    """Analyse automatique des deux équipes d'un match."""
+    data = request.get_json() or {}
+    team_a = data.get("team_a", "")
+    team_b = data.get("team_b", "")
+    league_name = data.get("league", "Premier League")
+
+    code = LEAGUE_CODES.get(league_name, "PL")
+    url_standings = f"https://api.football-data.org/v4/competitions/{code}/standings"
+    
+    try:
+        res = requests.get(url_standings, headers=headers, timeout=10)
+        standings_info = "Données non disponibles."
+        
+        if res.status_code == 200:
+            tables = res.json().get("standings", [])
+            if tables:
+                table = tables[0].get("table", [])
+                lines = []
+                for team in table:
+                    t_name = team["team"]["name"]
+                    if team_a.lower() in t_name.lower() or team_b.lower() in t_name.lower():
+                        lines.append(
+                            f"Pos {team['position']}: {t_name} | Pts: {team['points']} | J: {team['playedGames']} | Diff: {team['goalDifference']} | Forme: {team.get('form', 'N/A')}"
+                        )
+                if lines:
+                    standings_info = "\n".join(lines)
+
+        return jsonify({
+            "status": "success",
+            "match": f"{team_a} vs {team_b}",
+            "analysis": {
+                "standings_raw": standings_info,
+                "recent_form_raw": "Consultez les détails de forme dans le classement ci-dessus.",
+                "h2h_raw": f"Compétition : {league_name}"
             }
-        ]
-    return matches
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route('/')
-def home():
-    return render_template_string(HTML_TEMPLATE)
-
-@app.route('/api/matches')
-def api_matches():
-    return jsonify(fetch_live_matches())
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
